@@ -105,9 +105,3 @@ void keyboard_handler_c(void) {
         }
     }
 }
-
-
-
-
-
-

@@ -13,7 +13,7 @@
 .section .bss
 .align 16
 stack_bottom:
-.skip 16384 # 16 KiB
+.skip 16384
 stack_top:
 
 
@@ -22,6 +22,9 @@ stack_top:
 .type _start, @function
 _start:
     mov $stack_top, %esp
+
+    push %ebx 
+    push %eax
 
     call kernel_main
     cli
