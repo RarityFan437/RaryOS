@@ -1,7 +1,7 @@
 #include "string.h"
 #include <stddef.h>
 
-void* itoa(int value, char* buffer, int base) {
+void* itoa(long value, char* buffer, int base) {
     if (buffer == NULL)
     {
         int c = 0;
@@ -11,27 +11,30 @@ void* itoa(int value, char* buffer, int base) {
             value /= 10;
         }
 
-        return (void*)c;
+        return (void*)(long)c;
     }
 
     int i = 0;
     char* digits = "0123456789ABCDEF";
     int is_negative = 0;
+    unsigned long uvalue;
 
-    if (value == 0) {
+    if (base == 10 && value < 0) {
+        is_negative = 1;
+        uvalue = (unsigned long)(-value);
+    } else {
+        uvalue = (unsigned long)value;
+    }
+
+    if (uvalue == 0) {
         buffer[i++] = '0';
         buffer[i] = '\0';
         return 0;
     }
 
-    if (value < 0 && base == 10) {
-        is_negative = 1;
-        value = -value;
-    }
-
-    while (value != 0) {
-        buffer[i++] = digits[value % base];
-        value = value / base;
+    while (uvalue != 0) {
+        buffer[i++] = digits[uvalue % (unsigned long)base];
+        uvalue = uvalue / (unsigned long)base;
     }
 
     if (is_negative) {
@@ -41,4 +44,6 @@ void* itoa(int value, char* buffer, int base) {
     buffer[i] = '\0';
 
     reverse(buffer);
+
+    return 0;
 }

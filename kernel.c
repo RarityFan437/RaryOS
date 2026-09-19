@@ -3,14 +3,24 @@
 #include <stdint.h>
 
 #include "idt.h"
+#include "irq.h"
+#include "input.h"
 #include "stdio.h"
 #include "string.h"
 #include "multiboot.h"
+#include "usb.h"
+
+#define RARYOS_VERSION "v0.1.13"
 
 void init_idt(void);
 void pic_remap(void);
+void init_pit(void);
 void* malloc(size_t size);
 void free(void* ptr);
+
+extern int usb_irq_active;
+
+volatile uint64_t pit_ticks = 0;
 
 enum vga_color {
     VGA_COLOR_BLACK = 0,
@@ -53,26 +63,26 @@ static char* heap_limit = &kernel_end;
 
 void init_heap(multiboot_info_t* mbd) {
     if (!(mbd->flags & MULTIBOOT_INFO_MEM_MAP)) {
-        heap_limit = &kernel_end + (16 * 1024 * 1024);
+        heap_limit = (char*)&kernel_end + (16 * 1024 * 1024);
         return;
     }
 
-    multiboot_memory_map_t* mmap = (multiboot_memory_map_t*)mbd->mmap_addr;
-    
+    multiboot_memory_map_t* mmap = (multiboot_memory_map_t*)(uintptr_t)mbd->mmap_addr;
+
     uint32_t mmap_end_addr = mbd->mmap_addr + mbd->mmap_length;
 
     uintptr_t kernel_addr = (uintptr_t)&kernel_end;
 
-    while ((uint32_t)mmap < mmap_end_addr) {
-        
+    while ((uint32_t)(uintptr_t)mmap < mmap_end_addr) {
+
         if (mmap->type == 1) {
             if (kernel_addr >= mmap->addr && kernel_addr < (mmap->addr + mmap->len)) {
                 heap_limit = (char*)(uintptr_t)(mmap->addr + mmap->len);
-                break; 
+                break;
             }
         }
 
-        mmap = (multiboot_memory_map_t*)((uint32_t)mmap + mmap->size + 4);
+        mmap = (multiboot_memory_map_t*)((uintptr_t)mmap + mmap->size + 4);
     }
 }
 
@@ -84,13 +94,12 @@ void* sbrk(ptrdiff_t increment) {
     uintptr_t start = (uintptr_t)&kernel_end;
 
     if (current_next > limit || current_next < start) {
-        return (void*)-1; 
+        return (void*)-1;
     }
 
     heap_end += increment;
     return (void*)prev_heap_end;
 }
-
 
 void terminal_initialize(void) {
     terminal_row = 0;
@@ -161,6 +170,17 @@ void terminal_putchar(char c) {
         }
         return;
     }
+    if (c == '\b')
+    {
+        if (terminal_column > 0) {
+            terminal_column--;
+        } else if (terminal_row > 0) {
+            terminal_row--;
+            terminal_column = VGA_WIDTH - 1;
+        }
+        terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+        return;
+    }
     terminal_putentryat(c, terminal_color, terminal_column, terminal_row);
     if (++terminal_column == VGA_WIDTH) {
         terminal_column = 0;
@@ -184,11 +204,33 @@ static inline void outb_main(uint16_t port, uint8_t val) {
     asm volatile ( "outb %b0, %w1" : : "a"(val), "Nd"(port) : "memory" );
 }
 
+void init_pit(void) {
+    uint32_t divisor = 1193182 / 100;
+    outb_main(0x43, 0x36);
+    outb_main(0x40, (uint8_t)(divisor & 0xFF));
+    outb_main(0x40, (uint8_t)((divisor >> 8) & 0xFF));
+}
+
+void pit_handler(struct regs* r) {
+    (void)r;
+    pit_ticks++;
+}
+
+extern void ps2_keyboard_handler(struct regs* r);
+
 void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
     terminal_initialize();
+    input_init();
+
+    irq_init();
     pic_remap();
+    init_pit();
     init_idt();
-    outb_main(0x21, 0xFD);
+
+    irq_register(32, pit_handler, "PIT");
+    irq_register(33, ps2_keyboard_handler, "PS/2");
+
+    outb_main(0x21, 0xFC);
     asm volatile("sti");
 
     init_heap(mbd);
@@ -197,35 +239,42 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
     char* kernel_args = "None";
 
     if (mbd->flags & MULTIBOOT_INFO_BOOT_LOADER_NAME) {
-        loader_name = (char*)mbd->boot_loader_name;
+        loader_name = (char*)(uintptr_t)mbd->boot_loader_name;
     }
 
     printf("========================================\n");
-    printf("         Welcome to RaryOS v0.1         \n");
+    printf("      Welcome to RaryOS %s        \n", RARYOS_VERSION);
     printf("========================================\n\n");
 
     printf("Loader Name : %s\n", loader_name);
 
     if (mbd->flags & MULTIBOOT_INFO_MEMORY) {
         uint32_t extended_ram_mb = mbd->mem_upper / 1024;
-        
-        printf("Base Memory : %d KB\n", mbd->mem_lower);
-        printf("Extended RAM: %d MB\n", extended_ram_mb);
+
+        printf("Avaible RAM: %d MB\n", extended_ram_mb);
     } else {
         printf("RAM Information: Not provided by bootloader\n");
     }
 
-    if (mbd->flags & MULTIBOOT_INFO_MEM_MAP) {
-        printf("Physical Memory Map: AVAILABLE (Buffer size: %d bytes)\n", mbd->mmap_length);
-    } else {
-        printf("Physical Memory Map: NOT AVAILABLE\n");
-    }
-
     printf("\n----------------------------------------\n");
 
+    usb_init();
+
+    printf("----------------------------------------\n");
+
+    uint64_t last_isr = 0;
 
     while (1) {
         asm volatile("hlt");
+
+        if (usb_get_isr_count() != last_isr) {
+            last_isr = usb_get_isr_count();
+        }
+
+        while (input_available()) {
+            int c = input_pop();
+            if (c < 0) break;
+            terminal_putchar((char)c);
+        }
     }
 }
-

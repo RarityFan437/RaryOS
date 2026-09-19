@@ -1,35 +1,69 @@
 #include "idt.h"
+#include "irq.h"
+#include "input.h"
+#include "stdio.h"
 
-extern void idt_flush(uint32_t idt_ptr_address);
-
-extern void keyboard_handler_asm(void);
-
+extern void idt_flush(uint64_t idt_ptr_address);
 extern void terminal_write_string(const char* data);
 
 idt_entry_t idt[IDT_ENTRIES];
 idt_ptr_t   idt_ptr;
 
-void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
+void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low  = base & 0xFFFF;
-    idt[num].base_high = (base >> 16) & 0xFFFF;
+    idt[num].base_mid  = (base >> 16) & 0xFFFF;
+    idt[num].base_high = (base >> 32) & 0xFFFFFFFF;
 
-    idt[num].sel     = sel;
-    idt[num].always0 = 0;
-    
-    idt[num].flags   = flags; 
+    idt[num].sel      = sel;
+    idt[num].ist      = 0;
+    idt[num].flags    = flags;
+    idt[num].reserved = 0;
 }
 
-void init_idt() {
+void exception_handler(struct regs* r) {
+    printf("\n*** EXCEPTION ***\n");
+    printf("Vector: %d\n", (int)r->vector);
+    printf("Error : %lx\n", r->error);
+    printf("RIP   : %lx\n", r->rip);
+    printf("CS    : %lx\n", r->cs);
+    printf("RFLAGS: %lx\n", r->rflags);
+    printf("RSP   : %lx\n", r->rsp);
+    printf("SS    : %lx\n", r->ss);
+    printf("RAX   : %lx\n", r->rax);
+    printf("RBX   : %lx\n", r->rbx);
+    printf("RCX   : %lx\n", r->rcx);
+    printf("RDX   : %lx\n", r->rdx);
+    printf("RSI   : %lx\n", r->rsi);
+    printf("RDI   : %lx\n", r->rdi);
+
+    if (r->vector == 14) {
+        uint64_t cr2;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        printf("CR2   : %lx\n", cr2);
+    }
+
+    printf("Halted.\n");
+    asm volatile("cli");
+    while (1) asm volatile("hlt");
+}
+
+void init_idt(void) {
     idt_ptr.limit = (sizeof(idt_entry_t) * IDT_ENTRIES) - 1;
-    idt_ptr.base  = (uint32_t)&idt;
+    idt_ptr.base  = (uint64_t)&idt;
 
     for (int i = 0; i < IDT_ENTRIES; i++) {
         idt_set_gate(i, 0, 0, 0);
     }
 
-     idt_set_gate(33, (uint32_t)keyboard_handler_asm, 0x08, 0x8E);
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate((uint8_t)i, isr_stub_table[i], 0x08, 0x8E);
+    }
 
-    idt_flush((uint32_t)&idt_ptr);
+    for (int i = 0; i < IRQ_STUB_COUNT; i++) {
+        idt_set_gate((uint8_t)(32 + i), irq_stub_table[i], 0x08, 0x8E);
+    }
+
+    idt_flush((uint64_t)&idt_ptr);
 }
 
 void outb(uint16_t port, uint8_t val) {
@@ -41,7 +75,6 @@ uint8_t inb(uint16_t port) {
     asm volatile ( "inb %1, %0" : "=a"(ret) : "Nd"(port) );
     return ret;
 }
-
 
 static inline void io_wait(void) {
     outb(0x80, 0);
@@ -60,8 +93,7 @@ void pic_remap(void) {
     outb(PIC2_COMMAND, 0x11);
     io_wait();
 
-
-    outb(PIC1_DATA, 0x20); 
+    outb(PIC1_DATA, 0x20);
     io_wait();
 
     outb(PIC2_DATA, 0x28);
@@ -81,8 +113,6 @@ void pic_remap(void) {
     outb(PIC2_DATA, 0xFF);
 }
 
-extern void keyboard_handler_asm(void);
-
 extern void terminal_putchar(char c);
 
 static const char keyboard_map[128] = {
@@ -92,16 +122,18 @@ static const char keyboard_map[128] = {
  '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/',   0, '*',   0, ' '
 };
 
-void keyboard_handler_c(void) {
+void ps2_keyboard_handler(struct regs* r) {
+    (void)r;
     uint8_t scancode = inb(0x60);
 
-    outb(0x20, 0x20); 
+    if (scancode & 0x80) {
+        return;
+    }
 
     if (scancode > 0 && scancode < 58) {
         char ascii_char = keyboard_map[scancode];
-        
         if (ascii_char != 0) {
-            terminal_putchar(ascii_char);
+            input_push(ascii_char);
         }
     }
 }

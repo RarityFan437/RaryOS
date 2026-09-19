@@ -1,3 +1,3 @@
 #pragma once
 
-void* itoa(int value, char* buffer, int base);
+void* itoa(long value, char* buffer, int base);
