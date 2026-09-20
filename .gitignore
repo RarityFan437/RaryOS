@@ -1,6 +1,4 @@
 *.sh
-*.bin
 *.log
-*.o
-*.elf64
-iso
+build
+old_save

@@ -2,6 +2,7 @@
 #include "irq.h"
 #include "input.h"
 #include "stdio.h"
+#include "io.h"
 
 extern void idt_flush(uint64_t idt_ptr_address);
 extern void terminal_write_string(const char* data);
@@ -64,20 +65,6 @@ void init_idt(void) {
     }
 
     idt_flush((uint64_t)&idt_ptr);
-}
-
-void outb(uint16_t port, uint8_t val) {
-    asm volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
-}
-
-uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    asm volatile ( "inb %1, %0" : "=a"(ret) : "Nd"(port) );
-    return ret;
-}
-
-static inline void io_wait(void) {
-    outb(0x80, 0);
 }
 
 #define PIC1          0x20

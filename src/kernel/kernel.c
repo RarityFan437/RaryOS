@@ -8,14 +8,18 @@
 #include "stdio.h"
 #include "string.h"
 #include "multiboot.h"
-#include "usb.h"
+#include "usb.hpp"
+#include "malloc.h"
+#include "pmm.h"
+#include "shell.h"
+#include "acpi.h"
+#include "lapic.h"
 
-#define RARYOS_VERSION "v0.1.13"
+#define RARYOS_VERSION "v0.1.22"
 
 void init_idt(void);
 void pic_remap(void);
 void init_pit(void);
-void* malloc(size_t size);
 void free(void* ptr);
 
 extern int usb_irq_active;
@@ -57,13 +61,13 @@ size_t terminal_column;
 uint8_t terminal_color;
 uint16_t* terminal_buffer;
 
-extern uint8_t kernel_end;
-static uint8_t* heap_end = &kernel_end;
-static char* heap_limit = &kernel_end;
+extern char kernel_end[];
+static char* heap_end = kernel_end;
+static char* heap_limit = kernel_end;
 
 void init_heap(multiboot_info_t* mbd) {
     if (!(mbd->flags & MULTIBOOT_INFO_MEM_MAP)) {
-        heap_limit = (char*)&kernel_end + (16 * 1024 * 1024);
+        heap_limit = (char*)((uintptr_t)kernel_end + (16 * 1024 * 1024));
         return;
     }
 
@@ -219,6 +223,8 @@ void pit_handler(struct regs* r) {
 extern void ps2_keyboard_handler(struct regs* r);
 
 void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
+    (void)magic;
+
     terminal_initialize();
     input_init();
 
@@ -233,10 +239,19 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
     outb_main(0x21, 0xFC);
     asm volatile("sti");
 
+    uintptr_t start_of_bitmap = (uintptr_t)kernel_end;
+    pmm_init(mbd, start_of_bitmap);
+
+    uintptr_t max_memory = mbd->mem_upper * 1024; 
+    size_t bitmap_size = (max_memory / 4096) / 8;
+
+    heap_end = kernel_end + bitmap_size;
+    heap_limit = heap_end;
+
     init_heap(mbd);
 
     char* loader_name = "Unknown Bootloader";
-    char* kernel_args = "None";
+    // char* kernel_args = "None";
 
     if (mbd->flags & MULTIBOOT_INFO_BOOT_LOADER_NAME) {
         loader_name = (char*)(uintptr_t)mbd->boot_loader_name;
@@ -248,10 +263,17 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
 
     printf("Loader Name : %s\n", loader_name);
 
-    if (mbd->flags & MULTIBOOT_INFO_MEMORY) {
-        uint32_t extended_ram_mb = mbd->mem_upper / 1024;
-
-        printf("Avaible RAM: %d MB\n", extended_ram_mb);
+    if (mbd->flags & MULTIBOOT_INFO_MEM_MAP) {
+        uint64_t total_ram = 0;
+        multiboot_memory_map_t* mmap = (multiboot_memory_map_t*)(uintptr_t)mbd->mmap_addr;
+        uint32_t mmap_end = mbd->mmap_addr + mbd->mmap_length;
+        while ((uint32_t)(uintptr_t)mmap < mmap_end) {
+            if (mmap->type == 1) total_ram += mmap->len;
+            mmap = (multiboot_memory_map_t*)((uintptr_t)mmap + mmap->size + 4);
+        }
+        printf("Avaible RAM: %d MB\n", (int)(total_ram / 1024 / 1024));
+    } else if (mbd->flags & MULTIBOOT_INFO_MEMORY) {
+        printf("Avaible RAM: %d MB\n", mbd->mem_upper / 1024);
     } else {
         printf("RAM Information: Not provided by bootloader\n");
     }
@@ -260,21 +282,11 @@ void kernel_main(uint32_t magic, multiboot_info_t* mbd) {
 
     usb_init();
 
-    printf("----------------------------------------\n");
+    acpi_init();
+    lapic_timer_init(100);
 
-    uint64_t last_isr = 0;
+    printf("\n----------------------------------------\n");
+    printf("Type 'help' for available commands.\n\n");
 
-    while (1) {
-        asm volatile("hlt");
-
-        if (usb_get_isr_count() != last_isr) {
-            last_isr = usb_get_isr_count();
-        }
-
-        while (input_available()) {
-            int c = input_pop();
-            if (c < 0) break;
-            terminal_putchar((char)c);
-        }
-    }
+    shell_run();
 }
