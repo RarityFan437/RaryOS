@@ -49,6 +49,7 @@ boot_main:
     push %ebp
     mov %esp, %ebp
 
+    # Цикл 1: Очистка таблицы PML4 (512 записей по 8 байт)
     mov $pml4, %edi
     xor %ecx, %ecx
 1:
@@ -58,6 +59,7 @@ boot_main:
     cmp $512, %ecx
     jne 1b
 
+    # Цикл 2: Очистка таблицы PDPT (512 записей по 8 байт)
     mov $pdpt, %edi
     xor %ecx, %ecx
 2:
@@ -67,40 +69,54 @@ boot_main:
     cmp $512, %ecx
     jne 2b
 
+    # Цикл 3: Тождественное отображение 4 ГБ памяти страницами по 2 МБ (2048 записей)
     mov $pd, %edi
     xor %ecx, %ecx
     xor %edx, %edx
 3:
     mov %edx, %eax
-    or $0x83, %eax
+    
+    # Проверяем, находится ли адрес в зоне MMIO (>= 3 ГБ / 0xC0000000)
+    cmp $0xC0000000, %edx
+    jb .Lnormal_ram
+    
+    # Для MMIO регионов (PCI, APIC, USB xHCI) включаем флаг Cache Disable (бит 4)
+    # Флаги: Present(0x1) | Writable(0x2) | Cache Disable(0x10) | Page Size 2MB(0x80) = 0x93
+    or $0x93, %eax          
+    jmp .Lwrite_entry
+    
+.Lnormal_ram:
+    # Для обычной оперативной памяти стандартные флаги
+    # Flags: Present(0x1) | Writable(0x2) | Page Size 2MB(0x80) = 0x83
+    or $0x83, %eax          
+    
+.Lwrite_entry:
     mov %eax, (%edi, %ecx, 8)
     movl $0, 4(%edi, %ecx, 8)
-    add $0x200000, %edx
+    add $0x200000, %edx     # Шаг вперед на 2 МБ физического пространства
     inc %ecx
-    cmp $2048, %ecx
+    cmp $2048, %ecx         # Повторяем для всех 4 таблиц PD (4 * 512 = 2048)
     jne 3b
 
+    # Подключаем созданные таблицы PD к корневым слотам таблицы PDPT
     mov $pdpt, %edi
     mov $pd, %eax
-    or $0x03, %eax
-    mov %eax, 0(%edi)
-    movl $0, 4(%edi)
+    or $0x03, %eax          # Флаги для таблиц: Present | Writable
+    mov %eax, 0(%edi)       # Слот 0: покрывает виртуальные адреса 0 - 1 ГБ
     add $0x1000, %eax
-    mov %eax, 8(%edi)
-    movl $0, 12(%edi)
+    mov %eax, 8(%edi)       # Слот 1: покрывает виртуальные адреса 1 - 2 ГБ
     add $0x1000, %eax
-    mov %eax, 16(%edi)
-    movl $0, 20(%edi)
+    mov %eax, 16(%edi)      # Слот 2: покрывает виртуальные адреса 2 - 3 ГБ
     add $0x1000, %eax
-    mov %eax, 24(%edi)
-    movl $0, 28(%edi)
+    mov %eax, 24(%edi)      # Слот 3: покрывает виртуальные адреса 3 - 4 ГБ (сюда входит USB xHCI)
 
+    # Подключаем PDPT к первому слоту корневой PML4
     mov $pml4, %edi
     mov $pdpt, %eax
     or $0x03, %eax
     mov %eax, 0(%edi)
-    movl $0, 4(%edi)
 
+    # Инициализация сегмента состояния задачи (TSS64) нулями
     mov $tss64, %edi
     xor %ecx, %ecx
 4:
@@ -109,12 +125,14 @@ boot_main:
     cmp $26, %ecx
     jne 4b
 
+    # Запись указателя на стек ядра в структуру TSS
     mov $stack_kernel_top, %eax
     mov %eax, 4(%edi)
     movl $0, 8(%edi)
 
     movw $104, 102(%edi)
 
+    # Настройка дескриптора TSS внутри таблицы GDT64
     mov $gdt64, %edi
     add $24, %edi
     mov $tss64, %ebx

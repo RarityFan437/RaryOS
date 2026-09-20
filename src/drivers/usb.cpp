@@ -629,6 +629,16 @@ void XhciController::run(uintptr_t mmio_base, uint8_t bus, uint8_t slot, uint8_t
     setup_evt_ring();
     start();
 
+    for (uint32_t p = 0; p < max_ports; p++) {
+        volatile uint32_t* portsc = reinterpret_cast<volatile uint32_t*>(ports + p * 0x10);
+        uint32_t val = mmio_rd32(portsc);
+        if (!(val & XHCI_PORTSC_PP)) {
+            mmio_wr32(portsc, val | XHCI_PORTSC_PP);
+        }
+    }
+
+    for (volatile int i = 0; i < 10000000; i++) { }
+
     uint32_t speed = 0, found_port = 0;
     bool found = false;
     for (uint32_t p = 0; p < max_ports; p++) {
@@ -636,7 +646,7 @@ void XhciController::run(uintptr_t mmio_base, uint8_t bus, uint8_t slot, uint8_t
         uint32_t val = mmio_rd32(portsc);
         mmio_wr32(portsc, XHCI_PORTSC_CSC | XHCI_PORTSC_PEC | XHCI_PORTSC_WRC |
                          XHCI_PORTSC_OCC | XHCI_PORTSC_PRC | XHCI_PORTSC_PLC |
-                         XHCI_PORTSC_CEC);
+                         XHCI_PORTSC_CEC | XHCI_PORTSC_PP);
         if (!(val & XHCI_PORTSC_CCS)) continue;
         port_reset(p, &speed);
         found_port = p + 1;
@@ -775,19 +785,21 @@ void usb_init(void) {
                                               static_cast<uint8_t>(func), 0x10, &is_io);
                 uint8_t prog_if = (cls >> 8) & 0xFF;
 
-                if (prog_if == 0x30) {
-                    printf("USB xHCI at %d:%d.%d, MMIO=%lx\n",
-                           bus, slot, func,
-                           static_cast<unsigned long>(bar));
-                    if (bar == 0) return;
-                    static_xhci.run(static_cast<uintptr_t>(bar),
-                                    static_cast<uint8_t>(bus),
-                                    static_cast<uint8_t>(slot),
-                                    static_cast<uint8_t>(func));
+                if (prog_if != 0x30) continue;
+
+                if (bar == 0) {
+                    printf("USB: BAR is zero, cannot init xHCI\n");
                     return;
-                } else if (prog_if == 0x20) { printf("USB EHCI unsupported\n"); return; }
-                else if (prog_if == 0x10) { printf("USB OHCI unsupported\n"); return; }
-                else if (prog_if == 0x00) { printf("USB UHCI unsupported\n"); return; }
+                }
+
+                printf("USB xHCI at %d:%d.%d, MMIO=%lx\n",
+                       bus, slot, func, (unsigned long)bar);
+
+                static_xhci.run(static_cast<uintptr_t>(bar),
+                                static_cast<uint8_t>(bus),
+                                static_cast<uint8_t>(slot),
+                                static_cast<uint8_t>(func));
+                return;
             }
         }
     }

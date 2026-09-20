@@ -35,13 +35,17 @@ $(IMG): $(BIN)
 	@cp $(BIN) $(BUILD_DIR)/iso/boot/my_kernel.bin
 	@echo "set timeout=0" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "set default=0" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "insmod all_video" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "insmod efi_gop" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "set gfxmode=1024x768x32,1024x768,800x600x32,800x600,640x480x32,640x480,auto" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "set gfxpayload=keep" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo 'menuentry "RaryOS" {' >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@echo "    multiboot /boot/my_kernel.bin" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    multiboot2 /boot/my_kernel.bin" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@grub-mkrescue -o $(IMG) $(BUILD_DIR)/iso >/dev/null 2>&1 || (echo "ERROR: grub-mkrescue failed. Install grub-pc-bin xorriso mtools"; exit 1)
+	@grub-mkrescue -o $(IMG) $(BUILD_DIR)/iso >/dev/null 2>&1 || (echo "ERROR: grub-mkrescue failed"; exit 1)
 	@rm -rf $(BUILD_DIR)/iso
-	@echo "Successfully built bootable disk image: $(IMG)"
+	@echo "Successfully built: $(IMG)"
 
 $(BIN): $(ELF64)
 	@echo " [OBJCOPY] $@"
@@ -49,7 +53,7 @@ $(BIN): $(ELF64)
 
 $(ELF64): $(OBJS)
 	@echo " [LD]      $@"
-	@$(LD) -m elf_x86_64 -T linker.ld -o $(ELF64) $(OBJS)
+	@$(LD) -m elf_x86_64 -z max-page-size=0x1000 -T linker.ld -o $(ELF64) $(OBJS)
 
 $(BUILD_DIR)/%.s.o: $(SRC_DIR)/%.s
 	@mkdir -p $(dir $@)

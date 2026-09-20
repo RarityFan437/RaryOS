@@ -1,14 +1,29 @@
-.set ALIGN,    1<<0             
-.set MEMINFO,  1<<1             
-.set FLAGS,    ALIGN | MEMINFO  
-.set MAGIC,    0x1BADB002
-.set CHECKSUM, -(MAGIC + FLAGS)
+.set MB2_MAGIC,  0xE85250D6
+.set MB2_ARCH,   0
+.set MB2_LEN,    (mb2_header_end - mb2_header)
+.set MB2_CHECK,  -(MB2_MAGIC + MB2_ARCH + MB2_LEN)
 
 .section .multiboot
-.align 4
-.long MAGIC
-.long FLAGS
-.long CHECKSUM
+.align 8
+mb2_header:
+    .long MB2_MAGIC
+    .long MB2_ARCH
+    .long MB2_LEN
+    .long MB2_CHECK
+
+    .align 8
+    .word 5
+    .word 0
+    .long 20
+    .long 1280
+    .long 400
+    .long 32
+
+    .align 8
+    .word 0
+    .word 0
+    .long 8
+mb2_header_end:
 
 .section .bss
 .align 8
@@ -41,15 +56,15 @@ _start:
     or $(1 << 10), %eax
     mov %eax, %cr4
 
-    mov $0xC0000080, %ecx         
+    mov $0xC0000080, %ecx
     rdmsr
-    or $(1 << 8), %eax            
+    or $(1 << 8), %eax
     wrmsr
 
     mov %cr0, %eax
     and $0xFFFFFFF3, %eax
     or $0x2, %eax
-    or $0x80000000, %eax          
+    or $0x80000000, %eax
     mov %eax, %cr0
 
     .extern gdt64_ptr
