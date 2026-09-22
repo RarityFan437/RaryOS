@@ -18,6 +18,7 @@
 #include "fb.h"
 #include "font8.h"
 #include "vmm.h"
+#include "pci.hpp"
 
 #define RARYOS_VERSION "v0.2.8"
 
@@ -199,41 +200,32 @@ void terminal_setcolor(uint8_t color) {
 }
 
 
-#define FB_SCALE 1
-#define CHAR_H (FONT_H * FB_SCALE)
+#define FB_SCALE 2 
+#define CHAR_H (8 * FB_SCALE)
+#define CHAR_W (8 * FB_SCALE)
 
-static int draw_char_fb(int cx, int cy, char c) {
+static void draw_char_fb(int cx, int cy, char c) {
     if ((unsigned char)c < 32 || (unsigned char)c > 126) c = '?';
     
     size_t char_index = (unsigned char)c - 32;
-    const uint32_t* glyph = font_data[char_index];
-    int real_width = font_widths[char_index];
+    const uint8_t* glyph = font_data[char_index];
 
     uint32_t px = (uint32_t)cx;
     uint32_t py = (uint32_t)cy;
 
-    for (int row = 0; row < FONT_H; row++) {
-        uint32_t bits = glyph[row];
+    for (int row = 0; row < 8; row++) {
+        uint8_t bits = glyph[row];
 
-#if FB_HW_MIRROR
-        uint32_t rev = 0;
-        for (int b = 0; b < 32; b++) {
-            if (bits & ((uint32_t)1 << b)) rev |= (uint32_t)(1 << (31 - b));
-        }
-        bits = rev;
-#endif
-
-        for (int col = 0; col < real_width; col++) {
-            uint32_t color = (bits & ((uint32_t)1 << (31 - col))) ? term_fg : term_bg;
+        for (int col = 0; col < 8; col++) {
+            uint32_t color = (bits & ((uint8_t)1 << (7 - col))) ? term_fg : term_bg;
             
             fb_fill_rect(px + (uint32_t)col * FB_SCALE,
                          py + (uint32_t)row * FB_SCALE,
                          FB_SCALE, FB_SCALE, color);
         }
     }
-
-    return real_width;
 }
+
 
 
 
@@ -280,25 +272,28 @@ void terminal_putchar(char c) {
             return;
         }
         if (c == '\b') {
-            if (terminal_column > 10) terminal_column -= 10;
-            else terminal_column = 0;
+            if (terminal_column >= CHAR_W) {
+                terminal_column -= CHAR_W;
+            } else {
+                terminal_column = 0;
+            }
             draw_char_fb(terminal_column, terminal_row * CHAR_H, ' ');
             return;
         }
         
         int current_y_pixels = terminal_row * CHAR_H;
+        draw_char_fb(terminal_column, current_y_pixels, c);
         
-        int letter_width = draw_char_fb(terminal_column, current_y_pixels, c);
+        terminal_column += CHAR_W;
         
-        terminal_column += (letter_width * FB_SCALE) + 1;
-        
-        if (terminal_column + 32 >= fb_width()) {
+        if (terminal_column + CHAR_W > fb_width()) {
             terminal_column = 0;
             terminal_row++;
             if ((terminal_row + 1) * CHAR_H > fb_height()) scroll_fb();
         }
         return;
     }
+
 
     if (c == '\n') {
         terminal_column = 0;
@@ -372,6 +367,10 @@ void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
     outb_main(0x21, 0xFC);
     asm volatile("sti");
 
+    printf("========================================\n");
+    printf("      Welcome to RaryOS %s        \n", RARYOS_VERSION);
+    printf("========================================\n\n");
+
     uintptr_t start_of_bitmap = (uintptr_t)kernel_end;
     pmm_init(&g_mb_info, start_of_bitmap);
 
@@ -383,20 +382,11 @@ void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
 
     init_heap(&g_mb_info);
 
-    uintptr_t xhci_base = 0xC000004000;
-    for (size_t i = 0; i < 256; i++) {
-        uintptr_t addr = xhci_base + (i * 4096);
-        vmm_map_page(addr, addr, PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHE_DISABLE);
-    }
-
-
     char* loader_name = "Unknown Bootloader";
     if (g_mb_info.flags & MULTIBOOT_INFO_BOOT_LOADER_NAME)
         loader_name = (char*)(uintptr_t)g_mb_info.boot_loader_name;
 
-    printf("========================================\n");
-    printf("      Welcome to RaryOS %s        \n", RARYOS_VERSION);
-    printf("========================================\n\n");
+    usb_init();
 
     printf("Loader Name : %s\n", loader_name);
 
@@ -414,8 +404,6 @@ void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
     }
 
     printf("\n----------------------------------------\n");
-
-    usb_init();
 
     acpi_init();
     lapic_timer_init(100);

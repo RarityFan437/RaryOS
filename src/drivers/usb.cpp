@@ -1,4 +1,5 @@
 #include "usb.hpp"
+#include "pci.hpp"
 
 extern "C" {
 #include "stdio.h"
@@ -6,7 +7,13 @@ extern "C" {
 #include "io.h"
 #include "irq.h"
 #include "input.h"
+#include "vmm.h"
+#include "pcidf.h"
 }
+
+#define PAGE_PRESENT (1ULL << 0)
+#define PAGE_WRITABLE (1ULL << 1)
+#define PAGE_CACHE_DISABLE (1ULL << 4)
 
 extern "C" void usb_handler_c(struct regs* r);
 
@@ -759,50 +766,42 @@ uint64_t usb_get_push_count()     { return g_usb_push_count; }
 uint64_t usb_get_bad_code_count() { return g_usb_bad_code_count; }
 
 void usb_init(void) {
-    for (int bus = 0; bus < 256; bus++) {
-        for (int slot = 0; slot < 32; slot++) {
-            for (int func = 0; func < 8; func++) {
-                uint32_t id = pci_read32(static_cast<uint8_t>(bus),
-                                         static_cast<uint8_t>(slot),
-                                         static_cast<uint8_t>(func), 0);
-                if ((id & 0xFFFF) == 0xFFFF) continue;
-
-                uint32_t cls = pci_read32(static_cast<uint8_t>(bus),
-                                          static_cast<uint8_t>(slot),
-                                          static_cast<uint8_t>(func), 0x08);
-                if (((cls >> 24) & 0xFF) != 0x0C || ((cls >> 16) & 0xFF) != 0x03) continue;
-
-                uint32_t cmd = pci_read32(static_cast<uint8_t>(bus),
-                                          static_cast<uint8_t>(slot),
-                                          static_cast<uint8_t>(func), 0x04);
-                pci_write32(static_cast<uint8_t>(bus),
-                            static_cast<uint8_t>(slot),
-                            static_cast<uint8_t>(func), 0x04, cmd | 0x0007);
-
-                int is_io = 0;
-                uint64_t bar = pci_read_bar64(static_cast<uint8_t>(bus),
-                                              static_cast<uint8_t>(slot),
-                                              static_cast<uint8_t>(func), 0x10, &is_io);
-                uint8_t prog_if = (cls >> 8) & 0xFF;
-
-                if (prog_if != 0x30) continue;
-
-                if (bar == 0) {
-                    printf("USB: BAR is zero, cannot init xHCI\n");
-                    return;
-                }
-
-                printf("USB xHCI at %d:%d.%d, MMIO=%lx\n",
-                       bus, slot, func, (unsigned long)bar);
-
-                static_xhci.run(static_cast<uintptr_t>(bar),
-                                static_cast<uint8_t>(bus),
-                                static_cast<uint8_t>(slot),
-                                static_cast<uint8_t>(func));
-                return;
-            }
-        }
+    Pci::PciDevice dev;
+    
+    // Ищем Xhci, если не найден остановка
+    if (!Pci::PciScanner::findPciDevice(Pci::DeviceType::Xhci, dev)) {
+        printf("USB: no controller found\n");
+        return;
     }
-    printf("USB: no controller found\n");
+
+    // активируем pci устройство
+    uint32_t cmd = pci_read32(dev.bus, dev.slot, dev.func, 0x04);
+    pci_write32(dev.bus, dev.slot, dev.func, 0x04, cmd | 0x0007);
+
+    int is_io = 0;
+    uint64_t bar = pci_read_bar64(dev.bus, dev.slot, dev.func, 0x10, &is_io);
+
+    if (bar == 0 || is_io) {
+        printf("USB: BAR is zero or IO space, cannot init xHCI\n");
+        return;
+    }
+
+    printf("USB xHCI found: Vendor:\n    %s\n    Device: %s\n", pci_get_vendor_name(dev.vendor_id), pci_get_device_name(dev.vendor_id, dev.device_id));
+
+    // округление вниз до ближайшего блока 4096 байт
+    uintptr_t phys_page_start = (uintptr_t)bar & ~0xFFFULL;
+
+    // выделение страниц памяти
+    for (size_t i = 0; i < 256; i++) {
+        uintptr_t addr = phys_page_start + (i * 4096);
+        vmm_map_page(addr, addr, PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHE_DISABLE);
+    }
+
+    // расчет виртуального адреса
+    uintptr_t xhci_virtual_address = phys_page_start + ((uintptr_t)bar & 0xFFF);
+
+    // Запуск драйвера
+    static_xhci.run(xhci_virtual_address, dev.bus, dev.slot, dev.func);
 }
 }
+

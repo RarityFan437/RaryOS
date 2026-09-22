@@ -90,12 +90,6 @@ void pmm_init(multiboot_info_t* mbd, uintptr_t kernel_end_phys) {
             m2 = (multiboot_memory_map_t*)((uintptr_t)m2 + m2->size + 4);
         }
     }
-
-    printf("PMM: Active. Top: %d MB, Usable: %d MB, Pages: %d, Bitmap: %d bytes\n",
-           (int)(max_memory_addr / 1024 / 1024),
-           (int)(usable_ram / 1024 / 1024),
-           (int)pmm_max_blocks,
-           (int)pmm_bitmap_size);
 }
 
 void* pmm_alloc_page(void) {
