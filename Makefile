@@ -12,7 +12,13 @@ BUILD_DIR = build
 ELF64 = $(BUILD_DIR)/my_kernel.elf64
 BIN   = $(BUILD_DIR)/my_kernel.bin
 
-INCLUDE_FLAGS = -I$(SRC_DIR)/lib -I$(SRC_DIR)/arch/x86_64 -I$(SRC_DIR)/drivers -I$(SRC_DIR)/kernel
+INCLUDE_FLAGS = -I$(SRC_DIR)/lib \
+                -I$(SRC_DIR)/arch/x86_64 \
+                -I$(SRC_DIR)/drivers \
+                -I$(SRC_DIR)/kernel \
+                -I$(SRC_DIR)/kernel/memory \
+                -I$(SRC_DIR)/boot
+
 COMMON_FLAGS  = -m64 -ffreestanding -O2 -nostdlib -mno-red-zone -mcmodel=small -fno-pic $(INCLUDE_FLAGS)
 
 CFLAGS   = $(COMMON_FLAGS) -std=gnu99 -Wall -Wextra
