@@ -30,12 +30,38 @@ uint32_t fb_pitch_pixels(void)  { return fb_pitch / 4; }
 
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
     if (x >= fb_w || y >= fb_h) return;
-#if FB_HW_MIRROR
-    x = fb_w - 1 - x;
-#endif
+
     uint32_t* row = (uint32_t*)(fb_base + y * fb_pitch);
     row[x] = rgb;
 }
+
+void fb_draw_glyph(uint32_t cx, uint32_t cy, const uint8_t* glyph, uint32_t fg, uint32_t bg, uint32_t scale) {
+    if (!fb_ok) return;
+
+    if (cx + 8 * scale > fb_w || cy + 8 * scale > fb_h) return;
+
+    uint32_t* fb_pixels = (uint32_t*)fb_base;
+    uint32_t stride = fb_pitch / 4;
+
+    for (uint32_t row = 0; row < 8; row++) {
+        uint8_t bits = glyph[row];
+
+        for (uint32_t s_row = 0; s_row < scale; s_row++) {
+            
+            uint32_t current_y = cy + (row * scale) + s_row;
+            uint32_t* dest_row = fb_pixels + (current_y * stride + cx);
+            
+            for (uint32_t col = 0; col < 8; col++) {
+                uint32_t color = (bits & (1 << (7 - col))) ? fg : bg;
+                
+                for (uint32_t s_col = 0; s_col < scale; s_col++) {
+                    dest_row[col * scale + s_col] = color;
+                }
+            }
+        }
+    }
+}
+
 
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb) {
     if (x >= fb_w || y >= fb_h) return;
