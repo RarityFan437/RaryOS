@@ -3,6 +3,8 @@
 #include "input.h"
 #include "stdio.h"
 #include "io.h"
+#include "effect.h"
+
 
 extern void idt_flush(uint64_t idt_ptr_address);
 extern void terminal_write_string(const char* data);
@@ -22,6 +24,20 @@ void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags) {
 }
 
 void exception_handler(struct regs* r) {
+    if (r->vector == 0x80) {
+    struct effect e = {
+        .op    = (uint32_t)r->rax,
+        .flags = 0,
+        .arg0  = r->rdi,
+        .arg1  = r->rsi,
+        .arg2  = r->rdx,
+        .arg3  = r->rcx,
+    };
+    effect_perform(&e);
+    r->rax = (uint64_t)e.result;
+    return;
+}
+
     printf("\n*** EXCEPTION ***\n");
     printf("Vector: %d\n", (int)r->vector);
     printf("Error : %lx\n", r->error);
@@ -63,6 +79,8 @@ void init_idt(void) {
     for (int i = 0; i < IRQ_STUB_COUNT; i++) {
         idt_set_gate((uint8_t)(32 + i), irq_stub_table[i], 0x08, 0x8E);
     }
+
+    idt_set_gate(0x80, (uint64_t)isr128, 0x08, 0xEE);
 
     idt_flush((uint64_t)&idt_ptr);
 }

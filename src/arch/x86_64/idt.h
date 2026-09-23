@@ -36,3 +36,4 @@ extern idt_ptr_t   idt_ptr;
 extern void idt_flush(uint64_t);
 extern uint64_t isr_stub_table[32];
 extern uint64_t irq_stub_table[IRQ_STUB_COUNT];
+extern void isr128(void);

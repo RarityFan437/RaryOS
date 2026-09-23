@@ -251,28 +251,9 @@ void acpi_init(void) {
 }
 
 void acpi_shutdown(void) {
-    if (pm1a_cnt_blk != 0) {
-        uint16_t val_a = (uint16_t)(((uint16_t)slp_typa << 10) | (1u << 13));
-        outw((uint16_t)pm1a_cnt_blk, val_a);
-
-        if (pm1b_cnt_blk) {
-            uint16_t val_b = (uint16_t)(((uint16_t)slp_typb << 10) | (1u << 13));
-            outw((uint16_t)pm1b_cnt_blk, val_b);
-        }
-    } else {
-        uint16_t candidates[] = { 0x604, 0x4004, 0xB004 };
-        for (int i = 0; i < 3; i++) {
-            uint16_t v = (uint16_t)(((uint16_t)slp_typa << 10) | (1u << 13));
-            outw(candidates[i], v);
-        }
-    }
-
-    for (volatile int i = 0; i < 100000000; i++) { }
-
-    if (is_qemu) {
-        outl(0x501, 0);
-    }
-
+    outl(0x501, 0);
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
     for (;;) asm volatile("hlt");
 }
 

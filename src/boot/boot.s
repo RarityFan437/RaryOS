@@ -151,6 +151,12 @@ ISR_ERR   29
 ISR_ERR   30
 ISR_NOERR 31
 
+.global isr128
+isr128:
+    push $0
+    push $128
+    jmp isr_common
+
 .extern exception_handler
 isr_common:
     push %rax

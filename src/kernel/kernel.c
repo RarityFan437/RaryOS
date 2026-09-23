@@ -11,7 +11,6 @@
 #include "usb.hpp"
 #include "malloc.h"
 #include "pmm.h"
-#include "shell.h"
 #include "acpi.h"
 #include "lapic.h"
 #include "fb.h"
@@ -19,8 +18,8 @@
 #include "pci.hpp"
 #include "terminal.h"
 #include "io.h"
-
-#define RARYOS_VERSION "v0.2.15"
+#include "user.h"
+#include "effect.h"
 
 #define PAGE_PRESENT (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
@@ -39,6 +38,9 @@ static char* heap_limit = kernel_end;
 
 static multiboot_memory_map_t g_mmap_buffer[128];
 static multiboot_info_t       g_mb_info;
+
+const char* version = "0.3.5";
+uint64_t g_ram_mb = 0;
 
 void init_heap(multiboot_info_t* mbd) {
     if (!(mbd->flags & MULTIBOOT_INFO_MEM_MAP)) {
@@ -153,9 +155,7 @@ extern void ps2_keyboard_handler(struct regs* r);
 
 void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
     // проверка
-    if (magic == 0x36d76289) {} else {
-        return;
-    }
+    if (magic != 0x36d76289) return;
 
     convert_mb2_to_mb1(mb2_info_addr);
 
@@ -164,6 +164,8 @@ void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
     input_init();
 
     irq_init();
+    effect_init();
+    effect_init_default_handlers();
     pic_remap();
     init_pit();
     init_idt();
@@ -174,49 +176,34 @@ void kernel_main(uint32_t magic, uint32_t mb2_info_addr) {
     outb(0x21, 0xFC);
     asm volatile("sti");
 
-    printf("========================================\n");
-    printf("      Welcome to RaryOS %s        \n", RARYOS_VERSION);
-    printf("========================================\n\n");
-
     uintptr_t start_of_bitmap = (uintptr_t)kernel_end;
     pmm_init(&g_mb_info, start_of_bitmap);
 
     uintptr_t max_memory = g_mb_info.mem_upper * 1024;
     size_t bitmap_size = (max_memory / 4096) / 8;
 
-    heap_end = kernel_end + bitmap_size;
-    heap_limit = heap_end;
-
-    init_heap(&g_mb_info);
-
-    char* loader_name = "Unknown Bootloader";
-    if (g_mb_info.flags & MULTIBOOT_INFO_BOOT_LOADER_NAME)
-        loader_name = (char*)(uintptr_t)g_mb_info.boot_loader_name;
-
-    usb_init();
-
-    printf("Loader Name : %s\n", loader_name);
-
+    uint64_t total_ram = 0;
     if (g_mb_info.flags & MULTIBOOT_INFO_MEM_MAP) {
-        uint64_t total_ram = 0;
         multiboot_memory_map_t* mmap = (multiboot_memory_map_t*)(uintptr_t)g_mb_info.mmap_addr;
         uint32_t mmap_end = g_mb_info.mmap_addr + g_mb_info.mmap_length;
         while ((uint32_t)(uintptr_t)mmap < mmap_end) {
             if (mmap->type == 1) total_ram += mmap->len;
             mmap = (multiboot_memory_map_t*)((uintptr_t)mmap + mmap->size + 4);
         }
-        printf("Available RAM: %d MB\n", (int)(total_ram / 1024 / 1024));
-    } else if (g_mb_info.flags & MULTIBOOT_INFO_MEMORY) {
-        printf("Available RAM: %d MB\n", g_mb_info.mem_upper / 1024);
     }
+    g_ram_mb = total_ram / 1024 / 1024;
 
-    printf("\n----------------------------------------\n");
+    heap_end = kernel_end + bitmap_size;
+    heap_limit = heap_end;
+
+    init_heap(&g_mb_info);
+
+    smbios_init();
+
+    usb_init();
 
     acpi_init();
     lapic_timer_init(100);
 
-    printf("\n----------------------------------------\n");
-    printf("Type 'help' for available commands.\n\n");
-
-    shell_run();
+    jump_to_user();
 }

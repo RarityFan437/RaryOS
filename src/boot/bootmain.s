@@ -29,16 +29,21 @@ tss64:
 .align 8
 .global gdt64
 gdt64:
-    .quad 0x0000000000000000
-    .quad 0x00209A0000000000
-    .quad 0x0000920000000000
-    .quad 0
-    .quad 0
+    #------------------------------------------------------------------------------------
+    #            HEX          base       flags        Access byte       base      limit
+    #------------------------------------------------------------------------------------
+    .quad 0x0000000000000000 # 00      0000 0000       0000 0000      00 00 00    00 00
+    .quad 0x00209A0000000000 # 00      0010 0000       1001 1010      00 00 00    00 00
+    .quad 0x0000920000000000 # 00      0000 0000       1001 0010      00 00 00    00 00
+    .quad 0x0000000000000000 # 00      0000 0000       0000 0000      00 00 00    00 00
+    .quad 0x0000000000000000 # 00      0000 0000       0000 0000      00 00 00    00 00
+    .quad 0x0020F20000000000 # 00      0011 0000       1111 0010      00 00 00    00 00
+    .quad 0x0020FA0000000000 # 00      0010 0000       1111 1010      00 00 00    00 00                                             
 
 .align 8
 .global gdt64_ptr
 gdt64_ptr:
-    .word 39
+    .word 55
     .long gdt64
 
 .section .text
@@ -78,17 +83,20 @@ boot_main:
     
     # Проверяем, находится ли адрес в зоне MMIO (>= 3 ГБ / 0xC0000000)
     cmp $0xC0000000, %edx
-    jb .Lnormal_ram
-    
-    # Для MMIO регионов (PCI, APIC, USB xHCI) включаем флаг Cache Disable (бит 4)
-    # Флаги: Present(0x1) | Writable(0x2) | Cache Disable(0x10) | Page Size 2MB(0x80) = 0x93
-    or $0x93, %eax          
+    jb .Lcheck_user
+
+    or $0x93, %eax          # MMIO (без USER)
     jmp .Lwrite_entry
-    
-.Lnormal_ram:
-    # Для обычной оперативной памяти стандартные флаги
-    # Flags: Present(0x1) | Writable(0x2) | Page Size 2MB(0x80) = 0x83
-    or $0x83, %eax          
+
+.Lcheck_user:
+    cmp $0x40000000, %edx   # ниже 1 ГБ?
+    jb .Luser_ram
+
+    or $0x83, %eax          # обычная kernel RAM (без USER)
+    jmp .Lwrite_entry
+
+.Luser_ram:
+    or $0x87, %eax          # RAM, доступная из ring 3       
     
 .Lwrite_entry:
     mov %eax, (%edi, %ecx, 8)
@@ -101,19 +109,20 @@ boot_main:
     # Подключаем созданные таблицы PD к корневым слотам таблицы PDPT
     mov $pdpt, %edi
     mov $pd, %eax
-    or $0x03, %eax          # Флаги для таблиц: Present | Writable
-    mov %eax, 0(%edi)       # Слот 0: покрывает виртуальные адреса 0 - 1 ГБ
+    or $0x07, %eax 
+    mov %eax, 0(%edi)
     add $0x1000, %eax
-    mov %eax, 8(%edi)       # Слот 1: покрывает виртуальные адреса 1 - 2 ГБ
+    and $~0x04, %eax
+    mov %eax, 8(%edi)
     add $0x1000, %eax
-    mov %eax, 16(%edi)      # Слот 2: покрывает виртуальные адреса 2 - 3 ГБ
+    mov %eax, 16(%edi)
     add $0x1000, %eax
-    mov %eax, 24(%edi)      # Слот 3: покрывает виртуальные адреса 3 - 4 ГБ (сюда входит USB xHCI)
+    mov %eax, 24(%edi)     # Слот 3: покрывает виртуальные адреса 3 - 4 ГБ (сюда входит USB xHCI)
 
     # Подключаем PDPT к первому слоту корневой PML4
     mov $pml4, %edi
     mov $pdpt, %eax
-    or $0x03, %eax
+    or $0x07, %eax        
     mov %eax, 0(%edi)
 
     # Инициализация сегмента состояния задачи (TSS64) нулями
